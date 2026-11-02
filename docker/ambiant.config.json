@@ -27,7 +27,7 @@
       {
         "name": "Ethereum Sepolia",
         "chainId": 11155111,
-        "rpcUrl": "https://eth-sepolia.g.alchemy.com/v2/H-0Jwet3s4jjG7Pt3o0rx",
+        "rpcUrl": "https://eth-sepolia.g.alchemy.com/v2/<ALCHEMY_KEY>",
         "blockRange": 1000,
         "blockSlice": 2,
         "pullInterval": 5,
