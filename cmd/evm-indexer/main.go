@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/evmi-cloud/go-evm-indexer/internal/autoloader"
 	internal_bus "github.com/evmi-cloud/go-evm-indexer/internal/bus"
+	"github.com/evmi-cloud/go-evm-indexer/internal/chaincheck"
 	evmi_database "github.com/evmi-cloud/go-evm-indexer/internal/database/evmi-database"
 	"github.com/evmi-cloud/go-evm-indexer/internal/exporter"
 	"github.com/evmi-cloud/go-evm-indexer/internal/gateway"
@@ -66,6 +68,10 @@ func main() {
 						logger.Fatal().Msg(err.Error())
 					}
 
+					logger.Info().Msg("Verify the chain id of every configured node")
+					if err := chaincheck.Verify(context.Background(), config.Resources.Blockchains); err != nil {
+						logger.Fatal().Msg(err.Error())
+					}
 					logger.Info().Msg("Initialize Bus")
 					internalBus := internal_bus.InitializeBus()
 
