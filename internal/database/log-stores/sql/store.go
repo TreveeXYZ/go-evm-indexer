@@ -8,6 +8,7 @@ package sql_store
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -246,16 +247,25 @@ func (s *SQLStore) GetLogsAfter(sourceIds []uint64, afterBlock uint64, afterLogI
 		return []types.EvmLog{}, nil
 	}
 	var rows []sqlLog
-	// Bind the log-index bound signed: the initial cursor is -1 ("no log of
-	// this block delivered yet"), which arrives here as ^uint64(0) and cannot
-	// be encoded into a Postgres bigint. As int64 it binds as -1 and
-	// `log_index > -1` selects the whole block — the intended semantics.
 	err := s.db.
 		Where("source_id IN ? AND block_number <= ? AND (block_number > ? OR (block_number = ? AND log_index > ?))",
-			sourceIds, toBlock, afterBlock, afterBlock, int64(afterLogIndex)).
+			sourceIds, toBlock, afterBlock, afterBlock, logIndexBound(afterLogIndex)).
 		Order("block_number asc, log_index asc").
 		Find(&rows).Error
 	return mapLogs(rows), err
+}
+
+// logIndexBound converts a log-index bound to the signed value the query binds:
+// a Postgres bigint cannot hold a uint64 above math.MaxInt64. The only such
+// bound is ^uint64(0), sent for a cursor with no block in progress: afterBlock
+// is fully delivered and nothing of it must come back. It binds as the largest
+// bigint, which no log index exceeds. Bound as -1 it selected the whole block,
+// and every log of the last exported block was delivered a second time.
+func logIndexBound(afterLogIndex uint64) int64 {
+	if afterLogIndex > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(afterLogIndex)
 }
 
 func (s *SQLStore) GetLogStream(sourceId uint64, fromBlock uint64, toBlock uint64, stream chan types.EvmLog) error {
