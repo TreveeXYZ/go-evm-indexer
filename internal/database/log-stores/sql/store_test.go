@@ -81,6 +81,36 @@ func TestSQLLogsRoundTrip(t *testing.T) {
 	}
 }
 
+// A cursor with no block in progress asks for "everything after afterBlock":
+// the logs of afterBlock itself were already delivered and must not come back.
+func TestSQLGetLogsAfterCompletedBlock(t *testing.T) {
+	s := newStore(t)
+	if err := s.InsertLogs([]types.EvmLog{mkLog(1, 10, 0), mkLog(1, 10, 1), mkLog(1, 11, 0), mkLog(1, 11, 2)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	cases := []struct {
+		name          string
+		afterBlock    uint64
+		afterLogIndex uint64
+		want          []string
+	}{
+		{"block 10 complete", 10, ^uint64(0), []string{"1:11:0", "1:11:2"}},
+		{"block 11 complete", 11, ^uint64(0), []string{}},
+		{"nothing delivered yet", 9, ^uint64(0), []string{"1:10:0", "1:10:1", "1:11:0", "1:11:2"}},
+		{"block 11 in progress", 11, 0, []string{"1:11:2"}},
+	}
+	for _, c := range cases {
+		got, err := s.GetLogsAfter([]uint64{1}, c.afterBlock, c.afterLogIndex, 11)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if ids(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s: GetLogsAfter = %s, want %v", c.name, ids(got), c.want)
+		}
+	}
+}
+
 func TestSQLTransactionsRoundTrip(t *testing.T) {
 	s := newStore(t)
 	if err := s.InsertTransactions([]types.EvmTransaction{
