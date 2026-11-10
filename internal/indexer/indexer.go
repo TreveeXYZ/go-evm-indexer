@@ -415,8 +415,16 @@ func (p *SourceIndexerService) serveIndexation(ctx context.Context, filter func(
 		latestBlockNumberIndexed = p.source.StartBlock
 	}
 
+	// seen is the head this loop last acted on. Starting from the current one
+	// makes a (re)started source wait for the next block before its first
+	// read, as the fixed PullInterval sleep did.
+	var seen uint64
+	if p.head != nil {
+		seen, _ = p.head.Head()
+	}
+
 	for {
-		if err := p.waitPullInterval(ctx); err != nil {
+		if err := p.waitHead(ctx, seen); err != nil {
 			return p.markStopped()
 		}
 
@@ -427,6 +435,7 @@ func (p *SourceIndexerService) serveIndexation(ctx context.Context, filter func(
 		if !known {
 			continue // the shared watcher has no answer yet
 		}
+		seen = currentBlock
 
 		p.metrics.SetSourceProgress(p.sourceLabels(), currentBlock, p.source.SyncBlock)
 
@@ -434,6 +443,16 @@ func (p *SourceIndexerService) serveIndexation(ctx context.Context, filter func(
 		// without subtracting first: a lagging RPC node can report a head below
 		// the cursor and the unsigned difference would wrap around.
 		if currentBlock <= latestBlockNumberIndexed || currentBlock-latestBlockNumberIndexed < p.chain.BlockSlice {
+			continue
+		}
+
+		// The shared watcher already read these blocks and this source's
+		// address emitted nothing in them: the cursor moves without a request.
+		if addr, ok := p.watchedAddress(); ok && p.head.Quiet(latestBlockNumberIndexed+1, currentBlock, addr) {
+			if err := p.advanceCursor(currentBlock, currentBlock); err != nil {
+				return err
+			}
+			latestBlockNumberIndexed = currentBlock
 			continue
 		}
 
@@ -486,6 +505,11 @@ func (p *SourceIndexerService) indexRange(client *w3.Client, filter func(fromBlo
 		return err
 	}
 
+	if err := p.checkAgainstSummaries(from, to, logs); err != nil {
+		p.logger.Error().Fields(logParams).Msg(err.Error())
+		return err
+	}
+
 	dbLogs, dbTxs, err := p.computeLogsAndTxs(client, logs)
 	if err != nil {
 		p.logger.Error().Fields(logParams).Msg(err.Error())
@@ -524,6 +548,25 @@ func (p *SourceIndexerService) indexRange(client *w3.Client, filter func(fromBlo
 		p.metrics.AddTransactionsIndexed(p.sourceLabels(), uint64(len(dbTxs)))
 	}
 
+	if err := p.advanceCursor(to, head); err != nil {
+		return err
+	}
+
+	// Emitted after the cursor is persisted: an exporter woken earlier would
+	// not see these logs as exportable yet. Only a source that has reached the
+	// head wakes it: a backfill keeps the pace of the PullInterval timer, so an
+	// exporter does not start on one source while the others are far behind.
+	if len(dbLogs) > 0 && to == head {
+		p.bus.Emit(context.Background(), internal_bus.LogsIndexedTopic, p.pipeline.ID)
+	}
+
+	p.metrics.ObserveBatchDuration(p.sourceLabels(), time.Since(rangeStart))
+	return nil
+}
+
+// advanceCursor persists the source cursor at block to and publishes the
+// progress; head is the chain head the progress is measured against.
+func (p *SourceIndexerService) advanceCursor(to, head uint64) error {
 	p.source.SyncBlock = to
 	tx := p.db.Conn.Model(&p.source).Update("sync_block", to)
 	if tx.Error != nil {
@@ -534,8 +577,58 @@ func (p *SourceIndexerService) indexRange(client *w3.Client, filter func(fromBlo
 	p.emitSourceUpdate()
 
 	p.metrics.SetSourceProgress(p.sourceLabels(), head, p.source.SyncBlock)
-	p.metrics.ObserveBatchDuration(p.sourceLabels(), time.Since(rangeStart))
 	return nil
+}
+
+// watchedAddress is the contract address the shared head watcher can answer
+// for: only CONTRACT and FACTORY sources filter on one address. It reports
+// false when the source has no watcher.
+func (p *SourceIndexerService) watchedAddress() (common.Address, bool) {
+	if p.head == nil || p.source.Address.String == "" {
+		return common.Address{}, false
+	}
+	switch p.source.Type {
+	case string(evmi_database.ContractLogSourceType), string(evmi_database.FactoryLogSourceType):
+		return common.HexToAddress(p.source.Address.String), true
+	}
+	return common.Address{}, false
+}
+
+// checkAgainstSummaries refuses an eth_getLogs answer that misses a block in
+// which the watcher saw this source's address emit: a load-balanced provider
+// can answer from a node that is behind and return nothing for a block it does
+// not have yet. The summary of the block is dropped before failing, so the
+// replay is not held up should the summary be the stale side (a reorg).
+func (p *SourceIndexerService) checkAgainstSummaries(from, to uint64, logs []ethTypes.Log) error {
+	addr, ok := p.watchedAddress()
+	if !ok {
+		return nil
+	}
+	expected := p.head.EmittedIn(from, to, addr)
+	if len(expected) == 0 {
+		return nil
+	}
+	got := make(map[uint64]struct{}, len(logs))
+	for i := range logs {
+		got[logs[i].BlockNumber] = struct{}{}
+	}
+	for _, block := range expected {
+		if _, found := got[block]; !found {
+			p.head.Forget(block)
+			return fmt.Errorf("eth_getLogs returned nothing for block %d, where this source has logs", block)
+		}
+	}
+	return nil
+}
+
+// waitHead waits for a head other than seen when the chain head is shared,
+// one PullInterval at most; a source polling the head itself sleeps one
+// PullInterval.
+func (p *SourceIndexerService) waitHead(ctx context.Context, seen uint64) error {
+	if p.head == nil {
+		return p.waitPullInterval(ctx)
+	}
+	return p.head.Wait(ctx, seen)
 }
 
 // chainHead is the latest block number: read from the shared per-chain watcher

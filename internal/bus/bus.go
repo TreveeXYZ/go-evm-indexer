@@ -7,7 +7,12 @@ import (
 )
 
 const (
-	NewLogTopic          string = "logs.new"
+	NewLogTopic string = "logs.new"
+	// LogsIndexedTopic is emitted once a source at the head has stored a batch
+	// of logs AND its cursor is persisted; the payload is the pipeline id (uint). It
+	// wakes the pipeline's exporters instead of letting them sleep a full
+	// PullInterval.
+	LogsIndexedTopic     string = "logs.indexed"
 	SourceUpdateTopic    string = "source.update"
 	EnableSourceTopic    string = "source.enable"
 	DisableSourceTopic   string = "source.disable"
@@ -38,6 +43,7 @@ func InitializeBus() *bus.Bus {
 	}
 
 	b.RegisterTopics(NewLogTopic)
+	b.RegisterTopics(LogsIndexedTopic)
 	b.RegisterTopics(SourceUpdateTopic)
 	b.RegisterTopics(EnableSourceTopic)
 	b.RegisterTopics(DisableSourceTopic)
