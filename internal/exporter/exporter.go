@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"time"
@@ -22,6 +23,10 @@ import (
 // defaultBlockBatch bounds how many blocks of logs are pulled from the store per
 // iteration when the blockchain does not define a BlockRange.
 const defaultBlockBatch uint64 = 1000
+
+// wakeSettleDelay is how long an exporter woken by new logs waits before its
+// next pass.
+const wakeSettleDelay = 250 * time.Millisecond
 
 // ExporterService runs a single plugin-backed exporter bound to one pipeline. It
 // streams every stored log of the pipeline's sources into the plugin's
@@ -261,6 +266,28 @@ func (p *ExporterService) run(ctx context.Context, logParams map[string]interfac
 		pullInterval = time.Second
 	}
 
+	// wake is signalled when a source of this pipeline has stored new logs, so
+	// an idle exporter delivers them now instead of at its next PullInterval.
+	// The interval stays as the fallback: a missed signal only costs a delay.
+	wake := make(chan struct{}, 1)
+	if p.bus != nil {
+		key := fmt.Sprintf("exporter-wake-%d", p.exporter.ID)
+		p.bus.RegisterHandler(key, bus.Handler{
+			Matcher: internal_bus.LogsIndexedTopic,
+			Handle: func(_ context.Context, e bus.Event) {
+				if id, ok := e.Data.(uint); !ok || id != p.pipeline.ID {
+					return
+				}
+				// Never block the emitting source: one pending signal is enough.
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			},
+		})
+		defer p.bus.DeregisterHandler(key)
+	}
+
 	for {
 		if ctx.Err() != nil {
 			p.setStatus(string(evmi_database.StoppedExporterStatus))
@@ -296,6 +323,13 @@ func (p *ExporterService) run(ctx context.Context, logParams map[string]interfac
 			select {
 			case <-ctx.Done():
 			case <-time.After(pullInterval):
+			case <-wake:
+				// The sources of a pipeline store the same block one after the
+				// other: a short pause lets the next pass take the whole block.
+				select {
+				case <-ctx.Done():
+				case <-time.After(wakeSettleDelay):
+				}
 			}
 			continue
 		}
