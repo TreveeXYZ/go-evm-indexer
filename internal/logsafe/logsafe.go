@@ -19,6 +19,10 @@ import (
 // directly.
 var Stderr = Writer(os.Stderr)
 
+// Stdout is the same for what is written to standard output: the database
+// library logs its slow and failed statements there, values included.
+var Stdout = Writer(os.Stdout)
+
 // Writer returns a writer that passes everything on to w with, in each URL,
 // the credentials, the path and the query removed: the places a key or a
 // password sits. `https://host/v2/key` is written `https://host/…`. A URL
