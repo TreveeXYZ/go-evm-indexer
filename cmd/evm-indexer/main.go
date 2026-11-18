@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/evmi-cloud/go-evm-indexer/internal/logsafe"
 	"github.com/rs/zerolog"
 
 	"github.com/evmi-cloud/go-evm-indexer/internal/autoloader"
@@ -22,6 +23,9 @@ import (
 )
 
 func main() {
+	// Everything this process logs goes through logsafe: no URL is written
+	// with its path, where a provider key sits.
+	log.SetOutput(logsafe.Stderr)
 
 	app := &cli.App{
 		Name:        "EVMI",
@@ -49,7 +53,7 @@ func main() {
 				Action: func(cCtx *cli.Context) error {
 
 					logger := zerolog.New(
-						zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
+						zerolog.ConsoleWriter{Out: logsafe.Stderr, TimeFormat: time.RFC3339},
 					).Level(zerolog.TraceLevel).With().Timestamp().Caller().Logger()
 
 					configPath := cCtx.String("config")
@@ -188,7 +192,7 @@ func main() {
 				},
 				Action: func(cCtx *cli.Context) error {
 					logger := zerolog.New(
-						zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
+						zerolog.ConsoleWriter{Out: logsafe.Stderr, TimeFormat: time.RFC3339},
 					).Level(zerolog.TraceLevel).With().Timestamp().Caller().Logger()
 
 					configFile, err := os.ReadFile(cCtx.String("config"))
@@ -224,7 +228,7 @@ func main() {
 
 	if err := app.Run(os.Args); err != nil {
 		logger := zerolog.New(
-			zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
+			zerolog.ConsoleWriter{Out: logsafe.Stderr, TimeFormat: time.RFC3339},
 		).Level(zerolog.TraceLevel).With().Timestamp().Caller().Logger()
 
 		logger.Fatal().Msg(err.Error())
