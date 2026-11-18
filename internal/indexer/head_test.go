@@ -11,11 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	evmi_database "github.com/evmi-cloud/go-evm-indexer/internal/database/evmi-database"
 	"github.com/rs/zerolog"
 )
 
-// fakeNode answers eth_blockNumber with a fixed head and counts the calls.
+// fakeNode answers the read of the latest block with a fixed head and counts
+// the calls.
 func fakeNode(t *testing.T, head uint64) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 	var calls atomic.Int64
@@ -25,14 +27,20 @@ func fakeNode(t *testing.T, head uint64) (*httptest.Server, *atomic.Int64) {
 			Method string          `json:"method"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.Method != "eth_blockNumber" {
+		if req.Method != "eth_getBlockByNumber" {
 			http.Error(w, "unexpected method "+req.Method, http.StatusBadRequest)
 			return
 		}
 		calls.Add(1)
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":"0x%x"}`, req.ID, head)
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, latestHeader(head))
 	}))
 	return srv, &calls
+}
+
+// latestHeader is the header a node answers for its latest block.
+func latestHeader(number uint64) string {
+	h, _ := json.Marshal(blockHead{Number: hexutil.Uint64(number), Hash: hashOf(number, 0), ParentHash: hashOf(number-1, 0)})
+	return string(h)
 }
 
 // One watcher, many readers: the node hears one question per interval no
@@ -79,7 +87,7 @@ func TestHeadWatcherSharesOneRequest(t *testing.T) {
 
 	// ~200ms elapsed at a 50ms interval: a handful of calls, not thousands.
 	if got := calls.Load(); got > 10 {
-		t.Fatalf("node answered %d eth_blockNumber calls; readers must not add any", got)
+		t.Fatalf("node answered %d reads of the latest block; readers must not add any", got)
 	}
 }
 
@@ -103,7 +111,7 @@ func TestHeadWatcherSurvivesNodeErrors(t *testing.T) {
 		}
 		var req struct{ ID json.RawMessage }
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":"0x10"}`, req.ID)
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, latestHeader(16))
 	}))
 	defer srv.Close()
 

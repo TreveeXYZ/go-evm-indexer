@@ -36,6 +36,7 @@ type nodeBlock struct {
 	number uint64
 	hash   common.Hash
 	parent common.Hash
+	time   uint64
 	logs   []ethTypes.Log
 }
 
@@ -50,6 +51,9 @@ type chainNode struct {
 	blocks map[uint64]*nodeBlock
 	calls  map[string]int
 
+	// ws, when set, answers the WebSocket connections (see head_listen_test.go).
+	ws func() http.Handler
+
 	// header may alter the header of a block or fail the call.
 	header func(number uint64, h *blockHead) error
 	// byHash may alter the logs answered for a block hash or fail the call.
@@ -60,6 +64,7 @@ type chainNode struct {
 
 const (
 	callHead    = "eth_blockNumber"
+	callLatest  = "eth_getBlockByNumber(latest)"
 	callHeader  = "eth_getBlockByNumber"
 	callByHash  = "eth_getLogs(blockHash)"
 	callByRange = "eth_getLogs(range)"
@@ -86,7 +91,7 @@ func (n *chainNode) add(number uint64, emitters ...common.Address) {
 // addOn puts block number of the given fork on the node, its parent on the
 // same fork.
 func (n *chainNode) addOn(number, fork uint64, emitters ...common.Address) {
-	b := &nodeBlock{number: number, hash: hashOf(number, fork), parent: hashOf(number-1, fork)}
+	b := &nodeBlock{number: number, hash: hashOf(number, fork), parent: hashOf(number-1, fork), time: uint64(time.Now().Unix())}
 	for i, addr := range emitters {
 		b.logs = append(b.logs, ethTypes.Log{
 			Address:     addr,
@@ -127,7 +132,20 @@ func bloomOf(logs []ethTypes.Log) ethTypes.Bloom {
 	return bloom
 }
 
+// headOf is the header of a block as the node gives it.
+func headOf(b *nodeBlock) *blockHead {
+	return &blockHead{Number: hexutil.Uint64(b.number), Hash: b.hash, ParentHash: b.parent, Bloom: bloomOf(b.logs), Timestamp: hexutil.Uint64(b.time)}
+}
+
 func (n *chainNode) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Upgrade") != "" {
+		if n.ws == nil {
+			http.Error(w, "this node has no WebSocket", http.StatusBadRequest)
+			return
+		}
+		n.ws().ServeHTTP(w, r)
+		return
+	}
 	var req struct {
 		ID     json.RawMessage   `json:"id"`
 		Method string            `json:"method"`
@@ -159,11 +177,19 @@ func (n *chainNode) answer(method string, params []json.RawMessage) (any, error)
 		return hexutil.Uint64(n.head), nil
 
 	case "eth_getBlockByNumber":
-		n.calls[callHeader]++
 		var tag string
 		if err := json.Unmarshal(params[0], &tag); err != nil {
 			return nil, err
 		}
+		if tag == "latest" {
+			n.calls[callLatest]++
+			if b, ok := n.blocks[n.head]; ok {
+				return headOf(b), nil
+			}
+			// The head of a chain whose blocks the test did not spell out.
+			return &blockHead{Number: hexutil.Uint64(n.head), Hash: hashOf(n.head, 0), ParentHash: hashOf(n.head-1, 0)}, nil
+		}
+		n.calls[callHeader]++
 		number, err := hexutil.DecodeUint64(tag)
 		if err != nil {
 			return nil, err
@@ -172,7 +198,7 @@ func (n *chainNode) answer(method string, params []json.RawMessage) (any, error)
 		if !ok {
 			return nil, nil // a real node answers null for a block it does not have
 		}
-		h := &blockHead{Number: hexutil.Uint64(b.number), Hash: b.hash, ParentHash: b.parent, Bloom: bloomOf(b.logs)}
+		h := headOf(b)
 		if n.header != nil {
 			if err := n.header(number, h); err != nil {
 				return nil, err
@@ -729,8 +755,10 @@ func TestServeSummarisesBeforePublishing(t *testing.T) {
 		}
 		seen = head
 	}
-	if h, l := n.count(callHeader), n.count(callByHash); h != 4 || l != 4 {
-		t.Fatalf("4 new blocks cost %d headers and %d log reads, want 4 and 4", h, l)
+	// Blocks 103 and 104 came with the read of the head: only 101 and 102,
+	// which the head jumped over, cost a header of their own.
+	if h, l := n.count(callHeader), n.count(callByHash); h != 2 || l != 4 {
+		t.Fatalf("4 new blocks cost %d headers and %d log reads, want 2 and 4", h, l)
 	}
 }
 
