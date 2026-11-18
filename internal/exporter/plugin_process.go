@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/evmi-cloud/go-evm-indexer/internal/logsafe"
 	pluginsdk "github.com/evmi-cloud/go-evm-indexer/pkg/exporter"
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
@@ -109,7 +110,7 @@ func pluginLogger(name string) hclog.Logger {
 	}
 	return hclog.New(&hclog.LoggerOptions{
 		Name:   "plugin/" + name,
-		Output: os.Stderr,
+		Output: logsafe.Stderr,
 		Level:  hclog.Info,
 	})
 }

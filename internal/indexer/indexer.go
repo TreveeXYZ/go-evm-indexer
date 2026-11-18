@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 	internal_bus "github.com/evmi-cloud/go-evm-indexer/internal/bus"
 	evmi_database "github.com/evmi-cloud/go-evm-indexer/internal/database/evmi-database"
 	log_stores "github.com/evmi-cloud/go-evm-indexer/internal/database/log-stores"
+	"github.com/evmi-cloud/go-evm-indexer/internal/logsafe"
 	"github.com/evmi-cloud/go-evm-indexer/internal/metrics"
 	"github.com/evmi-cloud/go-evm-indexer/internal/types"
 	"github.com/lmittmann/w3"
@@ -58,7 +58,7 @@ func NewSourceIndexerService(
 ) *SourceIndexerService {
 
 	logger := zerolog.New(
-		zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
+		zerolog.ConsoleWriter{Out: logsafe.Stderr, TimeFormat: time.RFC3339},
 	).Level(zerolog.TraceLevel).With().Timestamp().Caller().Logger()
 
 	return &SourceIndexerService{
