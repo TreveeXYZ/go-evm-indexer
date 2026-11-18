@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/evmi-cloud/go-evm-indexer/internal/logsafe"
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
@@ -38,7 +39,7 @@ func LoadDatabase(dbType DatabaseType, config map[string]string, logger zerolog.
 			return nil, errors.New("filename of sqlite database not provided in config")
 		}
 
-		db, err = gorm.Open(sqlite.Open(filename), &gorm.Config{})
+		db, err = gorm.Open(sqlite.Open(filename), &gorm.Config{Logger: safeLogger(logsafe.Stdout)})
 		if err != nil {
 			return nil, err
 		}
@@ -53,7 +54,7 @@ func LoadDatabase(dbType DatabaseType, config map[string]string, logger zerolog.
 
 		db, err = gorm.Open(postgres.New(postgres.Config{
 			DSN: dsn,
-		}), &gorm.Config{})
+		}), &gorm.Config{Logger: safeLogger(logsafe.Stdout)})
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +67,7 @@ func LoadDatabase(dbType DatabaseType, config map[string]string, logger zerolog.
 			return nil, errors.New("dsn of sqlite database not provided in config")
 		}
 
-		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: safeLogger(logsafe.Stdout)})
 		if err != nil {
 			return nil, err
 		}
